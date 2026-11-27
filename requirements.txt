@@ -1,0 +1,4 @@
+crewai==0.130.0
+ddgs
+streamlit
+pysqlite3-binary; sys_platform == "linux"
