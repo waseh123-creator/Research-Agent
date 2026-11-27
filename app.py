@@ -15,7 +15,6 @@ except Exception:
 
 import streamlit as st
 from crewai import Agent, Task, Crew, Process, LLM
-from crewai.tools import tool
 
 # DuckDuckGo library: new name is "ddgs", old name is "duckduckgo_search"
 try:
@@ -25,52 +24,39 @@ except Exception:
 
 
 # ----------------------------------------------------------------------------
-# DuckDuckGo tools (no API key needed)
+# DuckDuckGo search (plain Python, no API key, no LLM tool-calling needed)
 # ----------------------------------------------------------------------------
-@tool("DuckDuckGo Web Search")
-def web_search(query: str) -> str:
-    """Search the web with DuckDuckGo. Input is a plain-text search query.
-    Returns titles, links and short snippets of the top results."""
+def gather_search_results(query: str) -> str:
+    parts = []
     try:
-        results = DDGS().text(query, max_results=5)
+        results = DDGS().text(query, max_results=6) or []
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            link = r.get("href", r.get("url", ""))
+            body = (r.get("body", "") or "")[:350]
+            parts.append(f"[Web {i}] {title}\nURL: {link}\n{body}")
     except Exception as e:
-        return f"Search failed: {e}"
-    if not results:
-        return "No results found."
-    lines = []
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "")
-        link = r.get("href", r.get("url", ""))
-        body = (r.get("body", "") or "")[:300]
-        lines.append(f"{i}. {title}\n   URL: {link}\n   {body}")
-    return "\n\n".join(lines)
-
-
-@tool("DuckDuckGo News Search")
-def news_search(query: str) -> str:
-    """Search recent news with DuckDuckGo. Input is a plain-text search query.
-    Returns headlines, sources, dates and links."""
+        parts.append(f"(Web search failed: {e})")
     try:
-        results = DDGS().news(query, max_results=5)
-    except Exception as e:
-        return f"News search failed: {e}"
-    if not results:
-        return "No news found."
-    lines = []
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "")
-        link = r.get("url", r.get("href", ""))
-        source = r.get("source", "")
-        date = r.get("date", "")
-        body = (r.get("body", "") or "")[:250]
-        lines.append(f"{i}. {title} ({source}, {date})\n   URL: {link}\n   {body}")
-    return "\n\n".join(lines)
+        news = DDGS().news(query, max_results=4) or []
+        for i, r in enumerate(news, 1):
+            title = r.get("title", "")
+            link = r.get("url", r.get("href", ""))
+            source = r.get("source", "")
+            date = r.get("date", "")
+            body = (r.get("body", "") or "")[:250]
+            parts.append(f"[News {i}] {title} ({source}, {date})\nURL: {link}\n{body}")
+    except Exception:
+        pass
+    return "\n\n".join(parts) if parts else "No results found."
 
 
 # ----------------------------------------------------------------------------
 # Crew builder
 # ----------------------------------------------------------------------------
 def run_search_agent(topic: str, api_key: str, model_name: str) -> str:
+    search_results = gather_search_results(topic)
+
     llm = LLM(
         model=f"groq/{model_name}",
         api_key=api_key,
@@ -80,16 +66,15 @@ def run_search_agent(topic: str, api_key: str, model_name: str) -> str:
 
     researcher = Agent(
         role="Web Researcher",
-        goal="Find accurate, up-to-date information about: {topic}",
+        goal="Extract the key facts about the topic from the provided DuckDuckGo search results",
         backstory=(
-            "You are a careful researcher. You search the web with DuckDuckGo, "
+            "You are a careful researcher. You only use the search results you are given, "
             "compare sources, and never invent facts or links."
         ),
-        tools=[web_search, news_search],
         llm=llm,
         verbose=False,
         allow_delegation=False,
-        max_iter=5,
+        max_iter=3,
     )
 
     writer = Agent(
@@ -107,17 +92,18 @@ def run_search_agent(topic: str, api_key: str, model_name: str) -> str:
 
     research_task = Task(
         description=(
-            "Research the topic: {topic}. Use the search tools (1 to 3 searches max). "
-            "Collect the key facts and the source URLs."
+            "Topic: " + topic + "\n\n"
+            "Here are the DuckDuckGo search results:\n\n" + search_results + "\n\n"
+            "Pick the most relevant and reliable facts from these results."
         ),
-        expected_output="Bullet-point findings with a source URL for each point.",
+        expected_output="Bullet-point findings, each with its source URL.",
         agent=researcher,
     )
 
     write_task = Task(
         description=(
-            "Using the research findings, write a clear answer about: {topic}. "
-            "Start with a short summary, then key points, then a 'Sources' list."
+            "Using the research findings, write a clear answer about: " + topic + ". "
+            "Start with a short summary, then key points, then a 'Sources' list with URLs."
         ),
         expected_output="A markdown answer with summary, key points and sources.",
         agent=writer,
@@ -132,7 +118,7 @@ def run_search_agent(topic: str, api_key: str, model_name: str) -> str:
         verbose=False,
     )
 
-    result = crew.kickoff(inputs={"topic": topic})
+    result = crew.kickoff()
     return getattr(result, "raw", str(result))
 
 
