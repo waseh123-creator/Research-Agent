@@ -54,8 +54,7 @@ def gather_search_results(query: str) -> str:
 # ----------------------------------------------------------------------------
 # Crew builder
 # ----------------------------------------------------------------------------
-def run_search_agent(topic: str, api_key: str, model_name: str) -> str:
-    search_results = gather_search_results(topic)
+def run_search_agent(topic: str, search_results: str, api_key: str, model_name: str) -> str:
 
     llm = LLM(
         model=f"groq/{model_name}",
@@ -122,14 +121,6 @@ def run_search_agent(topic: str, api_key: str, model_name: str) -> str:
     return getattr(result, "raw", str(result))
 
 
-# ----------------------------------------------------------------------------
-# Streamlit UI
-# ----------------------------------------------------------------------------
-st.set_page_config(page_title="CrewAI Search Agent", page_icon="🔎", layout="centered")
-st.title("🔎 CrewAI Search Agent")
-st.caption("CrewAI + DuckDuckGo search + Groq LLM")
-
-
 FALLBACK_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 
 
@@ -154,6 +145,66 @@ def get_models(key: str):
     except Exception:
         return FALLBACK_MODELS
 
+
+# ----------------------------------------------------------------------------
+# Streamlit UI
+# ----------------------------------------------------------------------------
+st.set_page_config(page_title="AI Search Agent", page_icon="🔎", layout="wide")
+
+CSS = """
+<style>
+.hero {
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #db2777 100%);
+    padding: 2.2rem 2rem;
+    border-radius: 18px;
+    color: white;
+    text-align: center;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 10px 30px rgba(79, 70, 229, 0.35);
+}
+.hero h1 { color: white; margin: 0; font-size: 2.4rem; }
+.hero p { color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0; font-size: 1.05rem; }
+.badges { margin-top: 0.9rem; }
+.badge {
+    display: inline-block; background: rgba(255,255,255,0.2);
+    padding: 0.25rem 0.8rem; border-radius: 999px;
+    margin: 0 0.25rem; font-size: 0.85rem;
+}
+.answer-card {
+    background: rgba(124, 58, 237, 0.06);
+    border: 1px solid rgba(124, 58, 237, 0.25);
+    border-left: 6px solid #7c3aed;
+    padding: 1.2rem 1.5rem;
+    border-radius: 14px;
+    margin-top: 1rem;
+}
+div.stButton > button {
+    border-radius: 12px;
+    transition: all 0.2s ease;
+}
+div.stButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(124, 58, 237, 0.3);
+}
+</style>
+"""
+st.markdown(CSS, unsafe_allow_html=True)
+
+st.markdown(
+    """
+    <div class="hero">
+        <h1>🔎 AI Search Agent</h1>
+        <p>Ask anything. Two AI agents search the web and write you a sourced answer.</p>
+        <div class="badges">
+            <span class="badge">CrewAI</span>
+            <span class="badge">DuckDuckGo</span>
+            <span class="badge">Groq</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 # Get the Groq key from Streamlit secrets first, otherwise from the sidebar
 secret_key = ""
 try:
@@ -161,27 +212,88 @@ try:
 except Exception:
     secret_key = ""
 
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "query" not in st.session_state:
+    st.session_state.query = ""
+
+
+def set_query(text):
+    st.session_state.query = text
+
+
 with st.sidebar:
-    st.header("Settings")
+    st.header("⚙️ Settings")
     if secret_key:
-        st.success("Groq API key loaded from secrets")
+        st.success("Groq API key loaded")
         api_key = secret_key
     else:
         api_key = st.text_input("Groq API key", type="password", help="Get it free at console.groq.com/keys")
     model_name = st.selectbox("Groq model", get_models(api_key), index=0)
 
-query = st.text_input("What do you want to search?", placeholder="e.g. Latest developments in solar energy")
+    st.divider()
+    st.subheader("🕘 Recent searches")
+    if st.session_state.history:
+        for item in reversed(st.session_state.history[-8:]):
+            st.button(item, key=f"hist_{item}", on_click=set_query, args=(item,), use_container_width=True)
+        if st.button("Clear history", use_container_width=True):
+            st.session_state.history = []
+            st.rerun()
+    else:
+        st.caption("Your searches will appear here.")
 
-if st.button("Search", type="primary"):
+st.text_input(
+    "What do you want to know?",
+    key="query",
+    placeholder="e.g. Latest developments in solar energy",
+)
+
+st.caption("Try an example:")
+examples = [
+    "Latest AI news this week",
+    "Best programming languages to learn in 2026",
+    "How does solar energy work?",
+    "Top tourist places in Pakistan",
+]
+cols = st.columns(len(examples))
+for col, ex in zip(cols, examples):
+    col.button(ex, key=f"ex_{ex}", on_click=set_query, args=(ex,), use_container_width=True)
+
+if st.button("🚀 Search", type="primary", use_container_width=True):
+    query = st.session_state.query.strip()
     if not api_key:
         st.error("Please add your Groq API key (sidebar or Streamlit secrets).")
-    elif not query.strip():
+    elif not query:
         st.warning("Please type something to search.")
     else:
-        with st.spinner("Agents are searching and writing..."):
-            try:
-                answer = run_search_agent(query.strip(), api_key.strip(), model_name)
-                st.markdown(answer)
-            except Exception as e:
-                st.error(f"Something went wrong: {e}")
-                st.info("If this is a rate limit error, wait a minute and try again, or switch the Groq model.")
+        try:
+            with st.status("Working on it...", expanded=True) as status:
+                st.write("🔎 Searching DuckDuckGo...")
+                search_results = gather_search_results(query)
+                st.write("🤖 Agents are analyzing and writing...")
+                answer = run_search_agent(query, search_results, api_key.strip(), model_name)
+                status.update(label="Done!", state="complete", expanded=False)
+
+            if query not in st.session_state.history:
+                st.session_state.history.append(query)
+
+            st.markdown('<div class="answer-card">', unsafe_allow_html=True)
+            st.markdown(answer)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            c1, c2 = st.columns(2)
+            c1.download_button(
+                "⬇️ Download answer (.md)",
+                data=answer,
+                file_name="search_answer.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+            with st.expander("📚 Raw DuckDuckGo results"):
+                st.text(search_results)
+        except Exception as e:
+            st.error(f"Something went wrong: {e}")
+            st.info("If this is a rate limit error, wait a minute and try again, or switch the Groq model.")
+
+st.markdown("---")
+st.caption("Built with CrewAI, DuckDuckGo and Groq · Streamlit")
