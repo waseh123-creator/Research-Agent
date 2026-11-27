@@ -75,7 +75,7 @@ def run_search_agent(topic: str, api_key: str, model_name: str) -> str:
         model=f"groq/{model_name}",
         api_key=api_key,
         temperature=0.2,
-        max_tokens=1500,
+        max_tokens=3000,
     )
 
     researcher = Agent(
@@ -143,6 +143,31 @@ st.set_page_config(page_title="CrewAI Search Agent", page_icon="🔎", layout="c
 st.title("🔎 CrewAI Search Agent")
 st.caption("CrewAI + DuckDuckGo search + Groq LLM")
 
+
+FALLBACK_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_models(key: str):
+    """Ask Groq which chat models exist right now, so retired models never break the app."""
+    if not key:
+        return FALLBACK_MODELS
+    try:
+        import requests
+        r = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=10,
+        )
+        ids = [m["id"] for m in r.json().get("data", [])]
+        skip = ("whisper", "orpheus", "guard", "safeguard", "compound", "tts", "embed")
+        ids = [i for i in ids if not any(w in i for w in skip)]
+        preferred = [m for m in FALLBACK_MODELS if m in ids]
+        rest = sorted(i for i in ids if i not in preferred)
+        return (preferred + rest) or FALLBACK_MODELS
+    except Exception:
+        return FALLBACK_MODELS
+
 # Get the Groq key from Streamlit secrets first, otherwise from the sidebar
 secret_key = ""
 try:
@@ -157,11 +182,7 @@ with st.sidebar:
         api_key = secret_key
     else:
         api_key = st.text_input("Groq API key", type="password", help="Get it free at console.groq.com/keys")
-    model_name = st.selectbox(
-        "Groq model",
-        ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
-        index=0,
-    )
+    model_name = st.selectbox("Groq model", get_models(api_key), index=0)
 
 query = st.text_input("What do you want to search?", placeholder="e.g. Latest developments in solar energy")
 
